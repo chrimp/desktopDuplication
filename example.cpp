@@ -22,8 +22,8 @@ int main() {
 		system("cls");
         switch (input) {
             case '1': {
-                DesktopDuplication::DuplMan desktopDupl;
-                desktopDupl.ChooseOutput();
+                DesktopDuplication::DuplMan desktopDupl = DesktopDuplication::Singleton<DesktopDuplication::DuplMan>::Instance();
+                DesktopDuplication::ChooseOutput();
                 break;
             }
             case 'q': {

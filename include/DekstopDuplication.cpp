@@ -1,8 +1,13 @@
 #include "./DesktopDuplication.hpp"
 
-#include <iomanip>
 #include <iostream> 
 #include <conio.h>
+#include <vector>
+#include <initguid.h>
+#include <Ntddvdeo.h>
+#include <SetupAPI.h>
+
+#pragma comment(lib, "SetupAPI.lib")
 
 using namespace DesktopDuplication;
 
@@ -123,7 +128,63 @@ bool DuplMan::InitDuplication() {
     return true;
 }
 
-void DuplMan::ChooseOutput() {
+void DuplMan::SetOutput(UINT adapterIndex, UINT outputIndex) {
+    m_Output = outputIndex;
+    // adapterIndex is not used for now
+}
+
+bool DesktopDuplication::ChooseOutput(_Out_ UINT& adapterIndex, _Out_ UINT& outputIndex) {
+    // Currently assuming there is only one adapter
+    IDXGIFactory* factory = nullptr;
+
+    HRESULT hr = CreateDXGIFactory(IID_PPV_ARGS(&factory));
+    if (FAILED(hr)) {
+        std::cerr << "Failed to create DXGI Factory. Reason: 0x" << std::hex << hr << std::endl;
+        return false;
+    }
+
+    adapterIndex = 0;
+    IDXGIAdapter* adapter = nullptr;
+
+    hr = factory->EnumAdapters(adapterIndex, &adapter);
+    factory->Release();
+    factory = nullptr;
+    if (FAILED(hr)) {
+        std::cerr << "Failed to enumerate adapters. Reason: 0x" << std::hex << hr << std::endl;
+        return false;
+    }
+
+    UINT lastOutputNum = enumOutputs(adapter);
+    adapter->Release();
+    adapter = nullptr;
+
+    bool validOutput = false;
+    while (!validOutput) {
+        std::cout << std::endl;
+        std::cout << "Choose an output to capture: ";
+        char input = _getch();
+        UINT output = input - '0';
+
+        if (output >= lastOutputNum || output < 0) {
+            std::cout << "Invalid output number. Please choose a valid output." << std::endl;
+            std::cout << "Press any key to continue..." << std::endl;
+            _getch();
+            std::cout << "\033[2A"
+                      << "\033[K"
+                      << "\033[1B"
+                      << "\033[K"
+                      << "\033[1A";
+        } else {
+            validOutput = true;
+            outputIndex = output;
+            system("cls");
+        }
+    }
+
+    return true;
+}
+
+void DesktopDuplication::ChooseOutput() {
     // Currently assuming there is only one adapter
     IDXGIFactory* factory = nullptr;
 
@@ -153,9 +214,9 @@ void DuplMan::ChooseOutput() {
         std::cout << std::endl;
         std::cout << "Choose an output to capture: ";
         char input = _getch();
-        m_Output = input - '0';
+        UINT output = input - '0';
 
-        if (m_Output >= lastOutputNum || m_Output < 0) {
+        if (output >= lastOutputNum || output < 0) {
             std::cout << "Invalid output number. Please choose a valid output." << std::endl;
             std::cout << "Press any key to continue..." << std::endl;
             _getch();
@@ -166,6 +227,7 @@ void DuplMan::ChooseOutput() {
                       << "\033[1A";
         } else {
             validOutput = true;
+            Singleton<DuplMan>::Instance().SetOutput(0, output);
             system("cls");
         }
     }
@@ -173,50 +235,33 @@ void DuplMan::ChooseOutput() {
     return;
 }
 
-UINT DuplMan::enumOutputs(IDXGIAdapter* adapter) {
-    // Create D3D device to get current display mode
-    ID3D11Device* device = nullptr;
-    HRESULT hr = D3D11CreateDevice(
-        adapter,
-        D3D_DRIVER_TYPE_UNKNOWN,
-        nullptr,
-        D3D11_CREATE_DEVICE_DEBUG,
-        nullptr,
-        0,
-        D3D11_SDK_VERSION,
-        &device,
-        nullptr,
-        nullptr
-    );
-
-    if (FAILED(hr)) {
-        std::cerr << "Failed to create D3D11 device. Reason: 0x" << std::hex << hr << std::endl;
-        throw std::exception();
-    }
-
-
+UINT DesktopDuplication::enumOutputs(IDXGIAdapter* adapter) {
     UINT outputIndex = 0;
     IDXGIOutput* output = nullptr;
 
-    DXGI_MODE_DESC unspecifiedMode = {0};
-
     while (adapter->EnumOutputs(outputIndex, &output) != DXGI_ERROR_NOT_FOUND) {
-        DXGI_OUTPUT_DESC desc;
+        // QI for IDXGIOutput6
+        IDXGIOutput6* output6 = nullptr;
+        HRESULT hr = output->QueryInterface(IID_PPV_ARGS(&output6));
+        if (FAILED(hr)) {
+            std::cerr << "Failed to query IDXGIOutput6 interface. Reason: 0x" << std::hex << hr << std::endl;
+            throw std::exception();
+        }
 
-        if (SUCCEEDED(output->GetDesc(&desc))) {
+        DXGI_OUTPUT_DESC1 desc;
+
+        if (SUCCEEDED(output6->GetDesc1(&desc))) {
             std::wstring monitorName = GetMonitorFriendlyName(desc);
-
             std::wcout << L"Output " << outputIndex << L": " << monitorName << L"\n";
+            
+            DEVMODE devMode = {};
+            devMode.dmSize = sizeof(DEVMODE);
 
-            DXGI_MODE_DESC currentMode;
-            if (SUCCEEDED(output->FindClosestMatchingMode(&unspecifiedMode, &currentMode, device))) {
-                UINT rate = currentMode.RefreshRate.Numerator / currentMode.RefreshRate.Denominator;
-                std::wcout << L"Current Mode: " << currentMode.Width << L"x" << currentMode.Height
-                           << L"@" << std::fixed << std::setprecision(2) << rate << L"Hz" << std::endl;
+            if (EnumDisplaySettings(desc.DeviceName, ENUM_CURRENT_SETTINGS, &devMode)) {
+                std::cout << "Current Mode: " << devMode.dmPelsWidth << "x" << devMode.dmPelsHeight << "@" << devMode.dmDisplayFrequency << "Hz" << std::endl;
             } else {
-                std::wcout << L"Unable to get current display mode for output " << monitorName << "." << std::endl;
-                HRESULT hr = output->FindClosestMatchingMode(&unspecifiedMode, &currentMode, device);
-                std::cout << "Reason: 0x" << std::hex << hr << std::endl;
+                std::wcout << "Unable to get current display mode for output " << monitorName << "." << std::endl;
+                std::cout << "Reason: 0x" << std::hex << GetLastError() << std::endl;
                 throw std::exception();
             }
         } else {
@@ -227,21 +272,89 @@ UINT DuplMan::enumOutputs(IDXGIAdapter* adapter) {
         output = nullptr;
         outputIndex++;
     }
-
-    device->Release();
-    device = nullptr;
-
     return outputIndex;
 }
 
-std::wstring DesktopDuplication::GetMonitorFriendlyName(const DXGI_OUTPUT_DESC& desc) {
+std::wstring DesktopDuplication::GetMonitorNameFromEDID(const std::wstring& deviceName) {
+    std::vector<BYTE> edid;
+
+    DISPLAY_DEVICE dd;
+    dd.cb = sizeof(DISPLAY_DEVICE);
+
+    if (EnumDisplayDevices(deviceName.c_str(), 0, &dd, 0)) {
+        HDEVINFO devInfo = SetupDiGetClassDevsEx(&GUID_DEVINTERFACE_MONITOR, NULL, NULL, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE, NULL, NULL, NULL);
+    
+        if (devInfo == INVALID_HANDLE_VALUE) {
+            return L"";
+        }
+
+        SP_DEVINFO_DATA devInfoData;
+        devInfoData.cbSize = sizeof(SP_DEVINFO_DATA);
+
+        if (SetupDiEnumDeviceInfo(devInfo, 0, &devInfoData)) {
+            HKEY hDevRegKey = SetupDiOpenDevRegKey(devInfo, &devInfoData, DICS_FLAG_GLOBAL, 0, DIREG_DEV, KEY_READ);
+
+            if (hDevRegKey == INVALID_HANDLE_VALUE) {
+                SetupDiDestroyDeviceInfoList(devInfo);
+                return L"";
+            }
+
+            DWORD edidSize = 0;
+            RegQueryValueEx(hDevRegKey, L"EDID", NULL, NULL, NULL, &edidSize);
+
+            if (edidSize != 0) {
+                edid.resize(edidSize);
+                RegQueryValueEx(hDevRegKey, L"EDID", NULL, NULL, edid.data(), &edidSize);
+            }
+
+            RegCloseKey(hDevRegKey);
+        }
+
+        SetupDiDestroyDeviceInfoList(devInfo);
+    }
+
+    if (edid.size() == 0) {
+        return L"";
+    }
+
+    // Parse EDID (Range: 54-71, 72-89, 90-107, 108-125) (Look for: 0x00 0x00 0x00 0xFC)
+    std::wstring monitorName = L"";
+    std::vector<std::pair<size_t, size_t>> ranges = {{54, 71}, {72, 89}, {90, 107}, {108, 125}};
+    
+    for (const auto& range : ranges) {
+        for (size_t i = range.first; i <= range.second && i + 3 < edid.size(); i++) {
+            if (edid[i] == 0x00 && edid[i + 1] == 0x00 && edid[i + 2] == 0x00 && edid[i + 3] == 0xFC) {
+                i += 5;
+                while (i < edid.size() && edid[i] != 0x0A) {
+                    monitorName += edid[i];
+                    i++;
+                }
+                break;
+            }
+        }
+        if (!monitorName.empty()) {
+            break;
+        }
+    }
+
+    return monitorName;
+}
+
+std::wstring DesktopDuplication::GetMonitorFriendlyName(const DXGI_OUTPUT_DESC1& desc) {
+    // Generic PnP Monitor
+
+    std::wstring monitorName = L"Unknown";
+
     DISPLAY_DEVICE displayDevice;
     displayDevice.cb = sizeof(DISPLAY_DEVICE);
 
     if (EnumDisplayDevices(desc.DeviceName, 0, &displayDevice, 0)) {
-        std::wstring monitorName = displayDevice.DeviceString;
-        return monitorName;
+        monitorName = displayDevice.DeviceString;
     }
 
-    return L"Unknown";
+    if (monitorName == L"Generic PnP Monitor") {
+        monitorName = GetMonitorNameFromEDID(desc.DeviceName);
+    }
+    
+    return monitorName;
 }
