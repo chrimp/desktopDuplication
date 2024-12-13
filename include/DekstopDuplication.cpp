@@ -1,4 +1,5 @@
 #include "./DesktopDuplication.hpp"
+#include "../opencv/opencv2/opencv.hpp"
 
 #include <iostream> 
 #include <conio.h>
@@ -6,19 +7,28 @@
 #include <initguid.h>
 #include <Ntddvdeo.h>
 #include <SetupAPI.h>
+#include <chrono>
+#include <format>
 
 #pragma comment(lib, "SetupAPI.lib")
 
+#ifdef _DEBUG
+#pragma comment(lib, "opencv_world4100d.lib")
+#else
+#pragma comment(lib, "opencv_world4100.lib")
+#endif
+
 using namespace DesktopDuplication;
 
-DuplMan::DuplMan() {
+Duplication::Duplication() {
     m_Device = nullptr;
     m_DesktopDupl = nullptr;
     m_AcquiredDesktopImage = nullptr;
     m_Output = -1;
+    m_IsDuplRunning = false;
 }
 
-DuplMan::~DuplMan() {
+Duplication::~Duplication() {
     if (m_Device) {
         m_Device.Reset();
         m_Device = nullptr;
@@ -36,9 +46,9 @@ DuplMan::~DuplMan() {
     }
 }
 
-bool DuplMan::InitDuplication() {
+bool Duplication::InitDuplication() {
     if (m_Output == -1) {
-        std::cout << "Output is not set. Call InitDuplication(ID3D11Device*, UINT) or ChooseOutput() to set the output." << std::endl;
+        std::cout << "Output is not set. Call DesktopDuplication::ChooseOutput() to set the output." << std::endl;
         return false;
     }
 
@@ -48,6 +58,7 @@ bool DuplMan::InitDuplication() {
     #endif
 
     ID3D11Device* device = nullptr;
+    ID3D11DeviceContext* context = nullptr;
 
     HRESULT hr = D3D11CreateDevice(
         nullptr,
@@ -59,7 +70,7 @@ bool DuplMan::InitDuplication() {
         D3D11_SDK_VERSION,
         &device,
         nullptr,
-        nullptr
+        &context
     );
 
     if (FAILED(hr)) {
@@ -67,12 +78,25 @@ bool DuplMan::InitDuplication() {
         return false;
     }
 
+    // QI for ID3D11DeviceContext4
+    hr = context->QueryInterface(IID_PPV_ARGS(m_Context.GetAddressOf()));
+    if (FAILED(hr)) {
+        std::cerr << "Failed to query D3D11DeviceContext4 interface. Reason: 0x" << std::hex << hr << std::endl;
+        return false;
+    }
+
+    context->Release();
+    context = nullptr;
+
     // QI for ID3D11Device5
     hr = device->QueryInterface(IID_PPV_ARGS(m_Device.GetAddressOf()));
     if (FAILED(hr)) {
         std::cerr << "Failed to query D3D11Device5 interface. Reason: 0x" << std::hex << hr << std::endl;
         return false;
     }
+
+    device->Release();
+    device = nullptr;
 
     // QI for IDXGIDevice
     IDXGIDevice* dxgiDevice = nullptr;
@@ -125,14 +149,143 @@ bool DuplMan::InitDuplication() {
         return false;
     }
 
+    m_IsDuplRunning = true;
     return true;
 }
 
-void DuplMan::SetOutput(UINT adapterIndex, UINT outputIndex) {
+bool Duplication::SaveFrame(const std::filesystem::path& path) {
+    if (!m_IsDuplRunning) {
+        std::cerr << "Desktop Duplication is not running. Call DesktopDuplication::InitDuplication() to start the duplication." << std::endl;
+        return false;
+    }
+
+    releaseFrame();
+
+    D3D11_TEXTURE2D_DESC desc;
+
+    std::vector<uint8_t> frameData;
+    if (!stageFrame(frameData, desc)) {
+        return false;
+    }
+    
+    unsigned int width = desc.Width;
+    unsigned int height = desc.Height;
+
+    cv::Mat frame(height, width, CV_8UC4, frameData.data());
+    cv::Mat image;
+    cv::cvtColor(frame, image, cv::COLOR_BGRA2BGR);
+
+    std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::tm localTime;
+    localtime_s(&localTime, &now);
+
+    std::string time = std::format("{:04d}-{:02d}-{:02d}_{:02d}-{:02d}-{:02d}", localTime.tm_year + 1900, localTime.tm_mon + 1, localTime.tm_mday, localTime.tm_hour, localTime.tm_min, localTime.tm_sec);
+
+    std::filesystem::path savePath = path / std::format("DeskDupl_{}.png", time);
+    cv::imwrite(savePath.string(), image);
+
+    return true;
+}
+
+int Duplication::GetFrame(ID3D11Texture2D*& frame, unsigned long timeout) {
+    ComPtr<IDXGIResource> desktopResource;
+    DXGI_OUTDUPL_FRAME_INFO frameInfo;
+
+    HRESULT hr = m_DesktopDupl->AcquireNextFrame(timeout, &frameInfo, &desktopResource);
+    if (hr == DXGI_ERROR_WAIT_TIMEOUT) return -1;
+
+    if (FAILED(hr)) {
+        std::cerr << "Failed to acquire next frame. Reason: 0x" << std::hex << hr << std::endl;
+        return 1;
+    }
+
+    if (m_AcquiredDesktopImage) {
+        m_AcquiredDesktopImage.Reset();
+    }
+
+    // QI for ID3D11Texture2D
+    hr = desktopResource->QueryInterface(IID_PPV_ARGS(m_AcquiredDesktopImage.GetAddressOf()));
+    if (FAILED(hr)) {
+        std::cerr << "Failed to query ID3D11Texture2D interface. Reason: 0x" << std::hex << hr << std::endl;
+        return 1;
+    }
+
+    frame = m_AcquiredDesktopImage.Get();
+
+    return 0;
+}
+
+void Duplication::releaseFrame() {
+    HRESULT hr = m_DesktopDupl->ReleaseFrame();
+    if (FAILED(hr)) {
+        if (hr == DXGI_ERROR_INVALID_CALL) {} // Frame was already released
+        else {
+            std::cerr << "Failed to release frame. Reason: 0x" << std::hex << hr << std::endl;
+            throw new std::exception();
+        }
+    }
+
+    if (m_AcquiredDesktopImage) {
+        m_AcquiredDesktopImage.Reset();
+    }
+
+    return;
+}
+
+bool Duplication::stageFrame(_Out_ std::vector<uint8_t>& dst, _Out_ D3D11_TEXTURE2D_DESC& descDst) {
+    ID3D11Texture2D* frame = nullptr;
+    int result = GetFrame(frame);
+
+    if (result != 0) {
+        return false;
+    }
+
+    D3D11_TEXTURE2D_DESC desc;
+    frame->GetDesc(&desc);
+
+    descDst = desc;
+
+    desc.Usage = D3D11_USAGE_STAGING;
+    desc.BindFlags = 0;
+    desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    desc.MiscFlags = 0;
+
+    ID3D11Texture2D* stagedFrame;
+    m_Device->CreateTexture2D(&desc, nullptr, &stagedFrame);
+    m_Context->CopyResource(stagedFrame, frame);
+    releaseFrame();
+
+    D3D11_MAPPED_SUBRESOURCE mappedResource;
+    HRESULT hr = m_Context->Map(stagedFrame, 0, D3D11_MAP_READ, 0, &mappedResource);
+    if (FAILED(hr)) {
+        std::cerr << "Failed to map resource. Reason: 0x" << std::hex << hr << std::endl;
+        return false;
+    }
+
+    uint8_t* data = static_cast<uint8_t*>(mappedResource.pData);
+    dst.resize(desc.Width * desc.Height * 4);
+
+    for (unsigned int y = 0; y < desc.Height; y++) {
+        memcpy(&dst[y * desc.Width * 4], data + y * mappedResource.RowPitch, desc.Width * 4);
+    }
+
+    m_Context->Unmap(stagedFrame, 0);
+    stagedFrame->Release();
+
+    return true;
+}
+
+void Duplication::duplicationThread() {
+
+}
+
+void Duplication::SetOutput(UINT adapterIndex, UINT outputIndex) {
     m_Output = outputIndex;
     // adapterIndex is not used for now
 }
 
+
+// MARK: Utils
 bool DesktopDuplication::ChooseOutput(_Out_ UINT& adapterIndex, _Out_ UINT& outputIndex) {
     // Currently assuming there is only one adapter
     IDXGIFactory* factory = nullptr;
@@ -227,7 +380,7 @@ void DesktopDuplication::ChooseOutput() {
                       << "\033[1A";
         } else {
             validOutput = true;
-            Singleton<DuplMan>::Instance().SetOutput(0, output);
+            Singleton<Duplication>::Instance().SetOutput(0, output);
             system("cls");
         }
     }

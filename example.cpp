@@ -7,6 +7,8 @@ void drawMain() {
     std::cout << "Desktop Duplication Example" << std::endl;
 
     std::cout << "1. Choose Output" << std::endl;
+    std::cout << "2. Start Duplication" << std::endl;
+    std::cout << "3. Take Screenshot" << std::endl;
     std::cout << "\nq: Quit" << std::endl;
 
     std::cout << "\nChoose an option: ";
@@ -22,8 +24,18 @@ int main() {
 		system("cls");
         switch (input) {
             case '1': {
-                DesktopDuplication::DuplMan desktopDupl = DesktopDuplication::Singleton<DesktopDuplication::DuplMan>::Instance();
+                DesktopDuplication::Duplication& dupl = DesktopDuplication::Singleton<DesktopDuplication::Duplication>::Instance();
                 DesktopDuplication::ChooseOutput();
+                break;
+            }
+            case '2': {
+                DesktopDuplication::Duplication& dupl = DesktopDuplication::Singleton<DesktopDuplication::Duplication>::Instance();
+                dupl.InitDuplication();
+                break;
+            }
+            case '3': {
+                DesktopDuplication::Duplication& dupl = DesktopDuplication::Singleton<DesktopDuplication::Duplication>::Instance();
+                dupl.SaveFrame("./");
                 break;
             }
             case 'q': {
