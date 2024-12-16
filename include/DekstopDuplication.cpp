@@ -163,10 +163,24 @@ bool Duplication::SaveFrame(const std::filesystem::path& path) {
 
     D3D11_TEXTURE2D_DESC desc;
 
-    std::vector<uint8_t> frameData;
-    if (!stageFrame(frameData, desc)) {
+    ID3D11Texture2D* stagedTexture = nullptr;
+    if (!getStagedTexture(stagedTexture)) {
         return false;
     }
+
+    stagedTexture->GetDesc(&desc);
+    std::vector<uint8_t> frameData(desc.Width * desc.Height * 4);
+
+    D3D11_MAPPED_SUBRESOURCE mappedResource;
+    m_Context->Map(stagedTexture, 0, D3D11_MAP_READ, 0, &mappedResource);
+
+    for (unsigned int i = 0; i < desc.Height; i++) {
+        memcpy(frameData.data() + i * desc.Width * 4, (uint8_t*)mappedResource.pData + i * mappedResource.RowPitch, desc.Width * 4);
+    }
+
+    m_Context->Unmap(stagedTexture, 0);
+    stagedTexture->Release();
+    stagedTexture = nullptr;
     
     unsigned int width = desc.Width;
     unsigned int height = desc.Height;
@@ -232,7 +246,7 @@ void Duplication::releaseFrame() {
     return;
 }
 
-bool Duplication::stageFrame(_Out_ std::vector<uint8_t>& dst, _Out_ D3D11_TEXTURE2D_DESC& descDst) {
+bool Duplication::getStagedTexture(_Out_ ID3D11Texture2D*& dst) {
     ID3D11Texture2D* frame = nullptr;
     int result = GetFrame(frame);
 
@@ -243,40 +257,16 @@ bool Duplication::stageFrame(_Out_ std::vector<uint8_t>& dst, _Out_ D3D11_TEXTUR
     D3D11_TEXTURE2D_DESC desc;
     frame->GetDesc(&desc);
 
-    descDst = desc;
-
     desc.Usage = D3D11_USAGE_STAGING;
     desc.BindFlags = 0;
     desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
     desc.MiscFlags = 0;
 
-    ID3D11Texture2D* stagedFrame;
-    m_Device->CreateTexture2D(&desc, nullptr, &stagedFrame);
-    m_Context->CopyResource(stagedFrame, frame);
+    m_Device->CreateTexture2D(&desc, nullptr, &dst);
+    m_Context->CopyResource(dst, frame);
     releaseFrame();
 
-    D3D11_MAPPED_SUBRESOURCE mappedResource;
-    HRESULT hr = m_Context->Map(stagedFrame, 0, D3D11_MAP_READ, 0, &mappedResource);
-    if (FAILED(hr)) {
-        std::cerr << "Failed to map resource. Reason: 0x" << std::hex << hr << std::endl;
-        return false;
-    }
-
-    uint8_t* data = static_cast<uint8_t*>(mappedResource.pData);
-    dst.resize(desc.Width * desc.Height * 4);
-
-    for (unsigned int y = 0; y < desc.Height; y++) {
-        memcpy(&dst[y * desc.Width * 4], data + y * mappedResource.RowPitch, desc.Width * 4);
-    }
-
-    m_Context->Unmap(stagedFrame, 0);
-    stagedFrame->Release();
-
     return true;
-}
-
-void Duplication::duplicationThread() {
-
 }
 
 void Duplication::SetOutput(UINT adapterIndex, UINT outputIndex) {

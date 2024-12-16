@@ -53,10 +53,8 @@ namespace DesktopDuplication {
         std::atomic<bool> ShowPreview;
 
         private:
-        void duplicationThread();
         void releaseFrame();
-
-        bool stageFrame(_Out_ std::vector<uint8_t>& dst, _Out_ D3D11_TEXTURE2D_DESC& descDst);
+        bool getStagedTexture(_Out_ ID3D11Texture2D*& dst);
 
         ComPtr<ID3D11Device5> m_Device;
         ComPtr<ID3D11DeviceContext4> m_Context;
@@ -66,10 +64,22 @@ namespace DesktopDuplication {
         UINT m_Output;
 
         bool m_IsDuplRunning;
+    };
 
-        // Telemetry
-        std::atomic<unsigned long long> m_FrameCount;
-        std::atomic<unsigned int> m_FramePerUnit;
+    class DuplicationThread {
+        public:
+        DuplicationThread(Duplication& duplication);
+        ~DuplicationThread();
+
+        bool Start();
+        void Stop();
+
+        private:
+        void threadFunc();
+
+        Duplication& m_Duplication;
+        std::atomic<bool> m_Run;
+        std::thread m_Thread;
     };
 
     void ChooseOutput();
