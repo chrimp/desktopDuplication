@@ -48,14 +48,13 @@ namespace DesktopDuplication {
         bool InitDuplication();
         bool IsOutputSet() { return m_Output != -1; }
         bool SaveFrame(const std::filesystem::path& path);
+        bool GetStagedTexture(_Out_ ID3D11Texture2D*& dst);
+
         int GetFrame(_Out_ ID3D11Texture2D*& frame, _In_ unsigned long timemout = 16);
 
-        std::atomic<bool> ShowPreview;
+        void ReleaseFrame();
 
         private:
-        void releaseFrame();
-        bool getStagedTexture(_Out_ ID3D11Texture2D*& dst);
-
         ComPtr<ID3D11Device5> m_Device;
         ComPtr<ID3D11DeviceContext4> m_Context;
         ComPtr<IDXGIOutputDuplication> m_DesktopDupl;
@@ -68,18 +67,28 @@ namespace DesktopDuplication {
 
     class DuplicationThread {
         public:
-        DuplicationThread(Duplication& duplication);
+        DuplicationThread();
         ~DuplicationThread();
+
+        void SetDuplication(Duplication* duplication) { m_Duplication = duplication; }
 
         bool Start();
         void Stop();
 
+        void TogglePreview() { m_ShowPreview = !m_ShowPreview; };
+        void RegisterTelemetry(int* frameCount) {
+            m_FrameCount = frameCount;
+            *m_FrameCount = 0;
+        }
+
         private:
         void threadFunc();
 
-        Duplication& m_Duplication;
+        Duplication* m_Duplication;
         std::atomic<bool> m_Run;
+        std::atomic<bool> m_ShowPreview;
         std::thread m_Thread;
+        int* m_FrameCount;
     };
 
     void ChooseOutput();

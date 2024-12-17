@@ -20,6 +20,7 @@
 
 using namespace DesktopDuplication;
 
+// MARK: Duplication
 Duplication::Duplication() {
     m_Device = nullptr;
     m_DesktopDupl = nullptr;
@@ -50,6 +51,10 @@ bool Duplication::InitDuplication() {
     if (m_Output == -1) {
         std::cout << "Output is not set. Call DesktopDuplication::ChooseOutput() to set the output." << std::endl;
         return false;
+    }
+
+    if (m_IsDuplRunning) {
+        return true;
     }
 
     UINT flag = 0;
@@ -159,12 +164,12 @@ bool Duplication::SaveFrame(const std::filesystem::path& path) {
         return false;
     }
 
-    releaseFrame();
+    ReleaseFrame();
 
     D3D11_TEXTURE2D_DESC desc;
 
     ID3D11Texture2D* stagedTexture = nullptr;
-    if (!getStagedTexture(stagedTexture)) {
+    if (!GetStagedTexture(stagedTexture)) {
         return false;
     }
 
@@ -229,7 +234,7 @@ int Duplication::GetFrame(ID3D11Texture2D*& frame, unsigned long timeout) {
     return 0;
 }
 
-void Duplication::releaseFrame() {
+void Duplication::ReleaseFrame() {
     HRESULT hr = m_DesktopDupl->ReleaseFrame();
     if (FAILED(hr)) {
         if (hr == DXGI_ERROR_INVALID_CALL) {} // Frame was already released
@@ -246,7 +251,7 @@ void Duplication::releaseFrame() {
     return;
 }
 
-bool Duplication::getStagedTexture(_Out_ ID3D11Texture2D*& dst) {
+bool Duplication::GetStagedTexture(_Out_ ID3D11Texture2D*& dst) {
     ID3D11Texture2D* frame = nullptr;
     int result = GetFrame(frame);
 
@@ -264,7 +269,7 @@ bool Duplication::getStagedTexture(_Out_ ID3D11Texture2D*& dst) {
 
     m_Device->CreateTexture2D(&desc, nullptr, &dst);
     m_Context->CopyResource(dst, frame);
-    releaseFrame();
+    ReleaseFrame();
 
     return true;
 }
@@ -274,6 +279,84 @@ void Duplication::SetOutput(UINT adapterIndex, UINT outputIndex) {
     // adapterIndex is not used for now
 }
 
+// MARK: DuplicationThread
+DuplicationThread::DuplicationThread() : m_Duplication(nullptr), m_Run(false), m_FrameCount(nullptr) {}
+
+DuplicationThread::~DuplicationThread() {
+    Stop();
+}
+
+bool DuplicationThread::Start() {
+    // Condition checks
+    if (m_Run) return true;
+    if (!m_Duplication) {
+        std::cerr << "DuplicationThread doesn't have Duplication instance." << std::endl;
+        return false;
+    }
+    if (!m_Duplication->IsOutputSet()) {
+        std::cerr << "DuplicationThread's instance doesn't have output." << std::endl;
+        return false;
+    }
+
+    bool start = m_Duplication->InitDuplication();
+    if (!start) return false;
+
+    m_Run = true;
+
+    m_Thread = std::thread(&DuplicationThread::threadFunc, this);
+
+    return true;
+}
+
+void DuplicationThread::Stop() {
+    // Condition checks
+    if (!m_Run) return;
+
+    m_Run = false;
+
+    if (m_Thread.joinable()) {
+        m_Thread.join();
+    }
+
+    return;
+}
+
+void DuplicationThread::threadFunc() {
+	std::chrono::time_point<std::chrono::high_resolution_clock> lastTime = std::chrono::high_resolution_clock::now();
+    while (m_Run) {
+        // Get duplicated surface without staging
+        ID3D11Texture2D* frame = nullptr;
+        int result = m_Duplication->GetFrame(frame);
+
+        switch (result) {
+            case 1:
+                m_Run = false;
+                #ifdef _DEBUG
+                abort();
+                #endif
+                return;
+            case -1:
+                continue; // Should preserve the previous frame; duplication is timed out
+        }
+        
+        if (m_ShowPreview) {
+            // To be implemented
+        }
+
+        m_Duplication->ReleaseFrame();
+		*m_FrameCount = *m_FrameCount + 1;
+        /*
+		std::chrono::time_point<std::chrono::high_resolution_clock> currentTime = std::chrono::high_resolution_clock::now();
+		std::chrono::duration<double> elapsed = currentTime - lastTime;
+        if (elapsed.count() >= 1.0) {
+			std::cout << "                                  \r" << std::flush;
+            std::cout << "FPS: " << *m_FrameCount << "\r" << std::flush;
+            lastTime = currentTime;
+            *m_FrameCount = 0;
+        }
+        */
+    }
+}
 
 // MARK: Utils
 bool DesktopDuplication::ChooseOutput(_Out_ UINT& adapterIndex, _Out_ UINT& outputIndex) {
