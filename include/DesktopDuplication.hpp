@@ -6,11 +6,10 @@
 #include <SetupAPI.h>
 #include <devguid.h>
 #include <thread>
-#include <condition_variable>
 #include <atomic>
 #include <mutex>
 #include <filesystem>
-#include <vector>
+#include <deque>
 
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "d3d11.lib")
@@ -41,6 +40,7 @@ namespace DesktopDuplication {
         ~Duplication();
 
         ID3D11Device5* GetDevice() { return m_Device.Get(); }
+        ID3D11DeviceContext4* GetContext() { return m_Context.Get(); }
 
         void SetOutput(UINT adapterIndex, UINT outputIndex);
         void GetTelemetry(_Out_ unsigned long long& frameCount, _Out_ unsigned int& framePerUnit);
@@ -75,20 +75,30 @@ namespace DesktopDuplication {
         bool Start();
         void Stop();
 
-        void TogglePreview() { m_ShowPreview = !m_ShowPreview; };
         void RegisterTelemetry(int* frameCount) {
             m_FrameCount = frameCount;
             *m_FrameCount = 0;
         }
 
+        const std::deque<ComPtr<ID3D11Texture2D>>& GetFrameQueue() {
+            std::scoped_lock lock(m_FrameQueueMutex);
+            return m_FrameQueue;
+        }
+
         private:
         void threadFunc();
+        void threadFuncPreview();
 
         Duplication* m_Duplication;
         std::atomic<bool> m_Run;
         std::atomic<bool> m_ShowPreview;
         std::thread m_Thread;
         int* m_FrameCount;
+        void* m_pthreadFunc;
+
+        std::deque<ComPtr<ID3D11Texture2D>> m_FrameQueue;
+        std::mutex m_FrameQueueMutex;
+        size_t m_FrameQueueSize = 0;
     };
 
     void ChooseOutput();
@@ -96,4 +106,7 @@ namespace DesktopDuplication {
     UINT enumOutputs(IDXGIAdapter* adapter);
     std::wstring GetMonitorFriendlyName(const DXGI_OUTPUT_DESC1& desc);
     std::wstring GetMonitorNameFromEDID(const std::wstring& deviceName);
+
+    LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
+    HWND CreateWindowInstance(HINSTANCE hInstance, int nCmdShow);
 }

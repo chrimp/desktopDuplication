@@ -1,5 +1,4 @@
 #include "./DesktopDuplication.hpp"
-#include "../opencv/opencv2/opencv.hpp"
 
 #include <iostream> 
 #include <conio.h>
@@ -9,8 +8,10 @@
 #include <SetupAPI.h>
 #include <chrono>
 #include <format>
+#include <wincodec.h>
 
 #pragma comment(lib, "SetupAPI.lib")
+#pragma comment(lib, "windowscodecs.lib")
 
 #ifdef _DEBUG
 #pragma comment(lib, "opencv_world4100d.lib")
@@ -169,16 +170,14 @@ bool Duplication::SaveFrame(const std::filesystem::path& path) {
     D3D11_TEXTURE2D_DESC desc;
 
     ID3D11Texture2D* stagedTexture = nullptr;
-    if (!GetStagedTexture(stagedTexture)) {
-        return false;
-    }
+    if (!GetStagedTexture(stagedTexture)) return false;
 
     stagedTexture->GetDesc(&desc);
     std::vector<uint8_t> frameData(desc.Width * desc.Height * 4);
 
     D3D11_MAPPED_SUBRESOURCE mappedResource;
     m_Context->Map(stagedTexture, 0, D3D11_MAP_READ, 0, &mappedResource);
-
+    
     for (unsigned int i = 0; i < desc.Height; i++) {
         memcpy(frameData.data() + i * desc.Width * 4, (uint8_t*)mappedResource.pData + i * mappedResource.RowPitch, desc.Width * 4);
     }
@@ -186,13 +185,23 @@ bool Duplication::SaveFrame(const std::filesystem::path& path) {
     m_Context->Unmap(stagedTexture, 0);
     stagedTexture->Release();
     stagedTexture = nullptr;
-    
+
     unsigned int width = desc.Width;
     unsigned int height = desc.Height;
 
-    cv::Mat frame(height, width, CV_8UC4, frameData.data());
-    cv::Mat image;
-    cv::cvtColor(frame, image, cv::COLOR_BGRA2BGR);
+    IWICImagingFactory* factory = nullptr;
+    IWICBitmapEncoder* encoder = nullptr;
+    IWICBitmapFrameEncode* frame = nullptr;
+    IWICStream* stream = nullptr;
+
+    HRESULT hr = CoInitialize(nullptr);
+    if (FAILED(hr)) return false;
+
+    hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory));
+    if (FAILED(hr)) return false;
+
+    hr = factory->CreateStream(&stream);
+    if (FAILED(hr)) return false;
 
     std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     std::tm localTime;
@@ -201,7 +210,41 @@ bool Duplication::SaveFrame(const std::filesystem::path& path) {
     std::string time = std::format("{:04d}-{:02d}-{:02d}_{:02d}-{:02d}-{:02d}", localTime.tm_year + 1900, localTime.tm_mon + 1, localTime.tm_mday, localTime.tm_hour, localTime.tm_min, localTime.tm_sec);
 
     std::filesystem::path savePath = path / std::format("DeskDupl_{}.png", time);
-    cv::imwrite(savePath.string(), image);
+
+    hr = stream->InitializeFromFilename(savePath.c_str(), GENERIC_WRITE);
+    if (FAILED(hr)) return false;
+
+    hr = factory->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder);
+    if (FAILED(hr)) return false;
+
+    hr = encoder->Initialize(stream, WICBitmapEncoderNoCache);
+    if (FAILED(hr)) return false;
+
+    hr = encoder->CreateNewFrame(&frame, nullptr);
+    if (FAILED(hr)) return false;
+
+    hr = frame->Initialize(nullptr);
+    if (FAILED(hr)) return false;
+
+    hr = frame->SetSize(width, height);
+    if (FAILED(hr)) return false;
+
+    WICPixelFormatGUID format = GUID_WICPixelFormat32bppBGRA;
+    hr = frame->SetPixelFormat(&format);
+    if (FAILED(hr)) return false;
+
+    hr = frame->WritePixels(height, desc.Width * 4, frameData.size(), frameData.data());
+    if (FAILED(hr)) return false;
+
+    frame->Commit();
+    encoder->Commit();
+
+    stream->Release();
+    frame->Release();
+    encoder->Release();
+    factory->Release();
+
+    CoUninitialize();
 
     return true;
 }
@@ -255,8 +298,14 @@ bool Duplication::GetStagedTexture(_Out_ ID3D11Texture2D*& dst) {
     ID3D11Texture2D* frame = nullptr;
     int result = GetFrame(frame);
 
-    if (result != 0) {
-        return false;
+    switch (result) {
+        case 1:
+            #ifdef _DEBUG
+            abort();
+            #endif
+            return false;
+        case -1:
+            return false;
     }
 
     D3D11_TEXTURE2D_DESC desc;
@@ -338,23 +387,28 @@ void DuplicationThread::threadFunc() {
             case -1:
                 continue; // Should preserve the previous frame; duplication is timed out
         }
-        
-        if (m_ShowPreview) {
-            // To be implemented
+
+        D3D11_TEXTURE2D_DESC desc;
+        frame->GetDesc(&desc);
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        desc.CPUAccessFlags = 0;
+        desc.MiscFlags = 0;
+
+        ComPtr<ID3D11Texture2D> copyDest;
+        m_Duplication->GetDevice()->CreateTexture2D(&desc, nullptr, copyDest.GetAddressOf());
+        m_Duplication->GetContext()->CopyResource(copyDest.Get(), frame);
+
+        {
+            std::scoped_lock lock(m_FrameQueueMutex);
+            m_FrameQueue.push_back(std::move(copyDest));
+            if (m_FrameQueue.size() > 0 && m_FrameQueue.size() > m_FrameQueueSize) {
+                m_FrameQueue.pop_front();
+            }
         }
 
         m_Duplication->ReleaseFrame();
 		*m_FrameCount = *m_FrameCount + 1;
-        /*
-		std::chrono::time_point<std::chrono::high_resolution_clock> currentTime = std::chrono::high_resolution_clock::now();
-		std::chrono::duration<double> elapsed = currentTime - lastTime;
-        if (elapsed.count() >= 1.0) {
-			std::cout << "                                  \r" << std::flush;
-            std::cout << "FPS: " << *m_FrameCount << "\r" << std::flush;
-            lastTime = currentTime;
-            *m_FrameCount = 0;
-        }
-        */
     }
 }
 
@@ -411,7 +465,7 @@ bool DesktopDuplication::ChooseOutput(_Out_ UINT& adapterIndex, _Out_ UINT& outp
 }
 
 void DesktopDuplication::ChooseOutput() {
-    // Currently assuming there is only one adapter
+    // Assuming there is only one adapter
     IDXGIFactory* factory = nullptr;
 
     HRESULT hr = CreateDXGIFactory(IID_PPV_ARGS(&factory));
