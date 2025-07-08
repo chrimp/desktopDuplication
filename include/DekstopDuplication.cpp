@@ -10,15 +10,6 @@
 #include <format>
 #include <wincodec.h>
 
-#pragma comment(lib, "SetupAPI.lib")
-#pragma comment(lib, "windowscodecs.lib")
-
-#ifdef _DEBUG
-#pragma comment(lib, "opencv_world4100d.lib")
-#else
-#pragma comment(lib, "opencv_world4100.lib")
-#endif
-
 using namespace DesktopDuplication;
 
 // MARK: Duplication
