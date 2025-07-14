@@ -50,6 +50,7 @@ namespace DesktopDuplication {
         bool IsOutputSet() { return m_Output != -1; }
         bool SaveFrame(const std::filesystem::path& path);
         bool GetStagedTexture(_Out_ ID3D11Texture2D*& dst);
+        bool GetStagedTexture(_Out_ ID3D11Texture2D*& dst, _In_ unsigned long timeout);
 
         int GetFrame(_Out_ ID3D11Texture2D*& frame, _In_ unsigned long timemout = 16);
 
@@ -62,7 +63,7 @@ namespace DesktopDuplication {
         ComPtr<ID3D11Texture2D> m_AcquiredDesktopImage;
 
         UINT m_Output;
-
+        UINT m_AdapterIndex;
         bool m_IsDuplRunning;
     };
 
@@ -104,7 +105,7 @@ namespace DesktopDuplication {
 
     void ChooseOutput();
     bool ChooseOutput(_Out_ UINT& adapterIndex, _Out_ UINT& outputIndex);
-    UINT enumOutputs(IDXGIAdapter* adapter);
+    int enumOutputs(IDXGIAdapter* adapter);
     std::wstring GetMonitorFriendlyName(const DXGI_OUTPUT_DESC1& desc);
     std::wstring GetMonitorNameFromEDID(const std::wstring& deviceName);
 
