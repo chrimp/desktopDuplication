@@ -57,8 +57,8 @@ bool Duplication::InitDuplication() {
     ID3D11Device* device = nullptr;
     ID3D11DeviceContext* context = nullptr;
 
-    IDXGIFactory* factory = nullptr;
-    HRESULT hr = CreateDXGIFactory(IID_PPV_ARGS(&factory));
+    IDXGIFactory1* factory = nullptr;
+    HRESULT hr = CreateDXGIFactory1(IID_PPV_ARGS(&factory));
     if (FAILED(hr)) {
         std::cerr << "Failed to create DXGI Factory. Reason: 0x" << std::hex << hr << std::endl;
         return false;
@@ -75,7 +75,7 @@ bool Duplication::InitDuplication() {
 
     hr = D3D11CreateDevice(
         adapter,
-        D3D_DRIVER_TYPE_HARDWARE,
+        D3D_DRIVER_TYPE_UNKNOWN,
         nullptr,
         flag,
         nullptr,
@@ -134,7 +134,7 @@ bool Duplication::InitDuplication() {
 
     // Get Output (Implement enum n list for user to choose)
     IDXGIOutput* dxgiOutput = nullptr;
-    hr = dxgiAdapter->EnumOutputs(0, &dxgiOutput); // Replace 0 with user choice (WIP)
+    hr = dxgiAdapter->EnumOutputs(m_Output, &dxgiOutput); // Replace 0 with user choice (WIP)
     dxgiAdapter->Release();
     dxgiAdapter = nullptr;
     if (FAILED(hr)) {
@@ -459,9 +459,9 @@ void DuplicationThread::threadFunc() {
 // MARK: Utils
 bool DesktopDuplication::ChooseOutput(_Out_ UINT& adapterIndex, _Out_ UINT& outputIndex) {
     // Currently assuming there is only one adapter
-    IDXGIFactory* factory = nullptr;
+    IDXGIFactory1* factory = nullptr;
 
-    HRESULT hr = CreateDXGIFactory(IID_PPV_ARGS(&factory));
+    HRESULT hr = CreateDXGIFactory1(IID_PPV_ARGS(&factory));
     if (FAILED(hr)) {
         std::cerr << "Failed to create DXGI Factory. Reason: 0x" << std::hex << hr << std::endl;
         return false;
@@ -509,8 +509,8 @@ bool DesktopDuplication::ChooseOutput(_Out_ UINT& adapterIndex, _Out_ UINT& outp
 }
 
 void DesktopDuplication::ChooseOutput() {
-    IDXGIFactory* factory = nullptr;
-    HRESULT hr = CreateDXGIFactory(IID_PPV_ARGS(&factory));
+    IDXGIFactory1* factory = nullptr;
+    HRESULT hr = CreateDXGIFactory1(IID_PPV_ARGS(&factory));
     if (FAILED(hr)) {
         std::cerr << "Failed to create DXGI Factory. Reason: 0x" << std::hex << hr << std::endl;
         return;
@@ -658,6 +658,7 @@ int DesktopDuplication::enumOutputs(IDXGIAdapter* adapter) {
 
     return selectedOutput;
 }
+
 std::wstring DesktopDuplication::GetMonitorNameFromEDID(const std::wstring& deviceName) {
     std::vector<BYTE> edid;
 
