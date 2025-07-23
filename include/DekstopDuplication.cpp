@@ -143,8 +143,7 @@ bool Duplication::InitDuplication() {
     }
 
     // QI for IDXGIOutput1
-    IDXGIOutput1* dxgiOutput1 = nullptr;
-    hr = dxgiOutput->QueryInterface(IID_PPV_ARGS(&dxgiOutput1));
+    hr = dxgiOutput->QueryInterface(IID_PPV_ARGS(m_DXGIOutput.GetAddressOf()));
     dxgiOutput->Release();
     dxgiOutput = nullptr;
     if (FAILED(hr)) {
@@ -153,9 +152,7 @@ bool Duplication::InitDuplication() {
     }
 
     // Create Desktop Duplication
-    hr = dxgiOutput1->DuplicateOutput(m_Device.Get(), m_DesktopDupl.GetAddressOf());
-    dxgiOutput1->Release();
-    dxgiOutput1 = nullptr;
+    hr = m_DXGIOutput->DuplicateOutput(m_Device.Get(), m_DesktopDupl.GetAddressOf());
     if (FAILED(hr)) {
         if (hr == DXGI_ERROR_NOT_CURRENTLY_AVAILABLE) {
             std::cerr << "There are already maximum number of applications using Desktop Duplication API." << std::endl;
@@ -166,6 +163,21 @@ bool Duplication::InitDuplication() {
     }
 
     m_IsDuplRunning = true;
+    return true;
+}
+
+bool Duplication::RecreateOutputDuplication() {
+    if (m_DesktopDupl) {
+        m_DesktopDupl->ReleaseFrame();
+        m_DesktopDupl.Reset();
+    }
+
+    HRESULT hr = m_DXGIOutput->DuplicateOutput(m_Device.Get(), m_DesktopDupl.GetAddressOf());
+    if (FAILED(hr)) {
+        std::cerr << "Failed to recreate output duplication. Reason: 0x" << std::hex << hr << std::endl;
+        return false;
+    }
+
     return true;
 }
 
@@ -260,11 +272,25 @@ bool Duplication::SaveFrame(const std::filesystem::path& path) {
 }
 
 int Duplication::GetFrame(ID3D11Texture2D*& frame, unsigned long timeout) {
+    int iter = 0;
+    Retry:
+
     ComPtr<IDXGIResource> desktopResource;
     DXGI_OUTDUPL_FRAME_INFO frameInfo;
 
     HRESULT hr = m_DesktopDupl->AcquireNextFrame(timeout, &frameInfo, &desktopResource);
     if (hr == DXGI_ERROR_WAIT_TIMEOUT) return -1;
+    if (hr == DXGI_ERROR_ACCESS_LOST) {
+        if (iter > 1) {
+            std::cerr << "Recreated duplication but failed for the same reason." << std::endl;
+            throw std::exception();
+        }
+        
+        RecreateOutputDuplication();
+        std::cout << "Recreated output duplication." << std::endl;
+        iter++;
+        goto Retry;
+    }
 
     if (FAILED(hr)) {
         std::cerr << "Failed to acquire next frame. Reason: 0x" << std::hex << hr << std::endl;

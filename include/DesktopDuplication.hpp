@@ -51,6 +51,7 @@ namespace DesktopDuplication {
         bool SaveFrame(const std::filesystem::path& path);
         bool GetStagedTexture(_Out_ ID3D11Texture2D*& dst);
         bool GetStagedTexture(_Out_ ID3D11Texture2D*& dst, _In_ unsigned long timeout);
+        bool RecreateOutputDuplication();
 
         int GetFrame(_Out_ ID3D11Texture2D*& frame, _In_ unsigned long timemout = 16);
 
@@ -61,6 +62,7 @@ namespace DesktopDuplication {
         ComPtr<ID3D11DeviceContext4> m_Context;
         ComPtr<IDXGIOutputDuplication> m_DesktopDupl;
         ComPtr<ID3D11Texture2D> m_AcquiredDesktopImage;
+        ComPtr<IDXGIOutput1> m_DXGIOutput;
 
         UINT m_Output;
         UINT m_AdapterIndex;
